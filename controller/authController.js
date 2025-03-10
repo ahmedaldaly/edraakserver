@@ -1,7 +1,75 @@
-const asynchandler = require('express-async-handler');
-const Jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const { user, validateRegister } = require('../module/User.js');
+const asynchandler = require('express-async-handler'); // مكتبة لتسهيل التعامل مع الأخطاء داخل async/await
+const Jwt = require('jsonwebtoken'); // مكتبة لإنشاء التوكن (JWT) للمصادقة
+const bcrypt = require('bcrypt'); // مكتبة لتشفير كلمات المرور
+const { user, validateRegister } = require('../module/User.js'); // استيراد موديل المستخدم والتحقق من البيانات
+const passport = require("passport"); // مكتبة المصادقة Passport.js
+const GoogleStrategy = require("passport-google-oauth20").Strategy; // استراتيجية تسجيل الدخول عبر Google OAuth 2.0
+
+// إعداد استراتيجية Google OAuth
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.CLIENT_ID, // معرف العميل من Google
+      clientSecret: process.env.CLIENT_SECRET, // المفتاح السري للعميل
+      callbackURL: "http://localhost:8000/auth/google/callback", // رابط الاسترجاع بعد تسجيل الدخول
+    },
+    async (accessToken, refreshToken, profile, done) => { // دالة تنفيذية بعد نجاح المصادقة
+      try {
+        let existingUser = await user.findOne({ email: profile.emails[0].value }); // البحث عن المستخدم في قاعدة البيانات
+
+        if (!existingUser) { // إذا لم يكن المستخدم موجودًا
+          existingUser = new user({
+            email: profile.emails[0].value, // تخزين البريد الإلكتروني من Google
+            username: profile.displayName, // تخزين اسم المستخدم من Google
+            password: "google-auth", // كلمة مرور افتراضية (لأننا لا نستخدمها مع Google)
+          });
+
+          await existingUser.save(); // حفظ المستخدم الجديد في قاعدة البيانات
+        }
+
+        // إنشاء توكن JWT للمصادقة
+        const token = Jwt.sign(
+          { id: existingUser._id, isAdmin: existingUser.isAdmin }, // تضمين معرف المستخدم وصلاحيته
+          process.env.JWT_SECRET || "secret12727", // استخدام مفتاح سري لتشفير التوكن
+          { expiresIn: "7d" } // مدة صلاحية التوكن (7 أيام)
+        );
+
+        existingUser.token = token; // تخزين التوكن في بيانات المستخدم
+        await existingUser.save(); // حفظ التحديث في قاعدة البيانات
+
+        return done(null, existingUser); // إنهاء العملية وإرجاع المستخدم
+      } catch (error) {
+        return done(error, null); // إذا حدث خطأ، يتم إرجاعه
+      }
+    }
+  )
+);
+
+// مسار بدء تسجيل الدخول عبر Google
+module.exports.googleAuth = passport.authenticate("google", {
+  scope: ["profile", "email"], // طلب الوصول إلى الملف الشخصي والبريد الإلكتروني
+  prompt: "consent", // إجبار Google على إظهار نافذة الإذن
+});
+
+// مسار رد Google بعد تسجيل الدخول
+module.exports.googleCallback = passport.authenticate("google", {
+  failureRedirect: "/login", // إعادة التوجيه إلى صفحة تسجيل الدخول في حالة الفشل
+  session: false, // تعطيل الجلسات لأننا نستخدم JWT
+}),
+  async (req, res) => {
+    if (!req.user) { // التحقق مما إذا كان المستخدم قد تمت المصادقة عليه
+      return res.redirect("/login"); // إذا لم يكن هناك مستخدم، يتم إعادة التوجيه إلى صفحة تسجيل الدخول
+    }
+    console.log("User authenticated successfully:", req.user); // طباعة بيانات المستخدم في الـ console
+    res.redirect(`http://localhost:3000/profile?token=${req.user.token}`); // إعادة التوجيه إلى React مع تمرير التوكن
+  };
+
+// تسجيل خروج المستخدم
+module.exports.logout = (req, res) => {
+  req.logout(() => { // حذف الجلسة
+    res.redirect("/"); // إعادة التوجيه إلى الصفحة الرئيسية
+  });
+};
 
 module.exports.Register = asynchandler(async (req, res) => {
    try{
