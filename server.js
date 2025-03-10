@@ -24,7 +24,9 @@ app.use(
   // تشغيل Passport
   app.use(passport.initialize());
   app.use(passport.session());
-  
+  app.get('/' ,(req,res)=>{
+      res.status(200).json({message:'hello'})
+  })
 
 app.use('/auth', require('./router/auth'))
 app.use('/v1/api/category', require('./router/category'))
